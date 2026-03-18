@@ -1,10 +1,51 @@
 use std::{iter::Peekable, str::Chars};
 
+pub struct ParseStateBuilder<'a> {
+    source: Option<Peekable<Chars<'a>>>,
+    line: Option<i32>,
+    position: Option<usize>,
+}
+
+impl<'a> std::default::Default for ParseStateBuilder<'a> {
+    fn default() -> Self {
+        Self {
+            source: None,
+            line: None,
+            position: None,
+        }
+    }
+}
+
+impl<'a> ParseStateBuilder<'a> {
+    pub fn source(mut self, source: &'a str) -> Self {
+        self.source = Some(source.chars().peekable());
+        self
+    }
+
+    pub fn line(mut self, line: i32) -> Self {
+        self.line = Some(line);
+        self
+    }
+
+    pub fn position(mut self, position: usize) -> Self {
+        self.position = Some(position);
+        self
+    }
+
+    pub fn build(self) -> ParseState<'a> {
+        ParseState {
+            source: self.source.unwrap_or("".chars().peekable()),
+            line: self.line.unwrap_or(1),
+            position: self.position.unwrap_or(0),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ParseState<'a> {
-    source: Peekable<Chars<'a>>,
-    line: i32,
-    position: usize,
+    pub source: Peekable<Chars<'a>>,
+    pub line: i32,
+    pub position: usize,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -12,6 +53,7 @@ pub enum ParseError {
     CannotGetNext,
     PredicateFailed,
     ChainFailed(Box<ParseError>),
+    NoneParserMatched,
 }
 
 impl std::fmt::Display for ParseError {
@@ -20,6 +62,7 @@ impl std::fmt::Display for ParseError {
             ParseError::CannotGetNext => write!(f, "cannot get next character"),
             ParseError::PredicateFailed => write!(f, "predicate failed"),
             ParseError::ChainFailed(err) => write!(f, "chain failed by: {}", err),
+            ParseError::NoneParserMatched => write!(f, "none of parsers matched"),
         }
     }
 }
@@ -29,6 +72,12 @@ type ParseResult<'a, Output> = Result<(Output, ParseState<'a>), ParseError>;
 
 pub trait Parser<'a, Output> {
     fn parse(&self, input: ParseState<'a>) -> ParseResult<'a, Output>;
+    fn map_with_rest<MapFn, MapInto>(self, transform: MapFn) -> impl Parser<'a, MapInto>
+    where
+        MapFn: Fn((Output, ParseState<'a>)) -> (MapInto, ParseState<'a>);
+    fn map<MapFn, MapInto>(self, transform: MapFn) -> impl Parser<'a, MapInto>
+    where
+        MapFn: Fn(Output) -> MapInto;
 }
 
 impl<'a, F, Output> Parser<'a, Output> for F
@@ -37,6 +86,20 @@ where
 {
     fn parse(&self, input: ParseState<'a>) -> ParseResult<'a, Output> {
         self(input)
+    }
+
+    fn map<MapFn, MapInto>(self, transform: MapFn) -> impl Parser<'a, MapInto>
+    where
+        MapFn: Fn(Output) -> MapInto,
+    {
+        move |state| self(state).map(|(x, rest)| (transform(x), rest))
+    }
+
+    fn map_with_rest<MapFn, MapInto>(self, transform: MapFn) -> impl Parser<'a, MapInto>
+    where
+        MapFn: Fn((Output, ParseState<'a>)) -> (MapInto, ParseState<'a>),
+    {
+        move |state: ParseState<'a>| self(state).map(|(x, rest)| transform((x, rest)))
     }
 }
 
@@ -69,6 +132,10 @@ where
     }
 }
 
+pub fn char<'a>(target: char) -> impl Parser<'a, char> {
+    satisfy(move |ch| ch == target)
+}
+
 pub fn chain<'a, T, K>(p1: impl Parser<'a, T>, p2: impl Parser<'a, K>) -> impl Parser<'a, (T, K)> {
     move |state: ParseState<'a>| {
         let (x1, rest) = p1
@@ -81,21 +148,38 @@ pub fn chain<'a, T, K>(p1: impl Parser<'a, T>, p2: impl Parser<'a, K>) -> impl P
     }
 }
 
-#[cfg(test)]
-mod parser_tests {
-    use super::*;
+pub fn or<'a, T>(ps: Vec<impl Parser<'a, T>>) -> impl Parser<'a, T> {
+    move |state: ParseState<'a>| {
+        for p in &ps {
+            let result = p.parse(state.clone());
 
-    fn define_state<'a>(
-        input: &'a str,
-        position: Option<usize>,
-        line: Option<i32>,
-    ) -> ParseState<'a> {
-        ParseState {
-            source: input.chars().peekable(),
-            position: 1 + position.unwrap_or(0), // automatically add position 1 offset
-            line: line.unwrap_or(1),
+            if result.is_ok() {
+                return result;
+            }
         }
+
+        Err(ParseError::NoneParserMatched)
     }
+}
+
+pub fn many1<'a, T>(p: impl Parser<'a, T>) -> impl Parser<'a, Vec<T>> {
+    move |state: ParseState<'a>| {
+        let mut results = vec![];
+        let mut input = state;
+
+        while let Ok((r, rest)) = p.parse(input.clone()) {
+            results.push(r);
+            input = rest
+        }
+
+        if results.is_empty() {}
+        Ok((results, input))
+    }
+}
+
+#[cfg(test)]
+mod combinators_tests {
+    use super::*;
 
     fn compare_states(s1: ParseState, s2: ParseState) -> bool {
         s1.source.collect::<String>() == s2.source.collect::<String>()
@@ -105,10 +189,13 @@ mod parser_tests {
 
     #[test]
     fn test_next() {
-        let input = define_state("Hello", None, None);
+        let input = ParseStateBuilder::default().source("Hello").build();
         let result = next().parse(input);
         let expected_ch = 'H';
-        let expected_state = define_state("ello", Some(expected_ch.len_utf8()), None);
+        let expected_state = ParseStateBuilder::default()
+            .source("ello")
+            .position(expected_ch.len_utf8())
+            .build();
 
         assert!(result.is_ok_and(|(ch, state)| {
             ch == expected_ch && compare_states(state, expected_state)
@@ -117,7 +204,7 @@ mod parser_tests {
 
     #[test]
     fn test_next_fails_by_cannot_get_next() {
-        let input = define_state("", None, None);
+        let input = ParseStateBuilder::default().build();
         let result = next().parse(input);
 
         assert!(result.is_err_and(|err| err == ParseError::CannotGetNext))
@@ -125,10 +212,13 @@ mod parser_tests {
 
     #[test]
     fn test_satisfy() {
-        let input = define_state("Hello", None, None);
+        let input = ParseStateBuilder::default().source("Hello").build();
         let result = satisfy(|ch| ch.is_uppercase()).parse(input);
         let expected_ch = 'H';
-        let expected_state = define_state("ello", Some(expected_ch.len_utf8()), None);
+        let expected_state = ParseStateBuilder::default()
+            .source("ello")
+            .position(expected_ch.len_utf8())
+            .build();
 
         assert!(result.is_ok_and(|(ch, state)| {
             ch == expected_ch && compare_states(state, expected_state)
@@ -137,7 +227,7 @@ mod parser_tests {
 
     #[test]
     fn test_satisfy_fails_by_cannot_get_next() {
-        let input = define_state("", None, None);
+        let input = ParseStateBuilder::default().build();
         let result = satisfy(|ch| ch.is_uppercase()).parse(input);
 
         assert!(result.is_err_and(|err| err == ParseError::CannotGetNext))
@@ -145,7 +235,7 @@ mod parser_tests {
 
     #[test]
     fn test_satisfy_fails_by_failed_predicate() {
-        let input = define_state("hello", None, None);
+        let input = ParseStateBuilder::default().source("hello").build();
         let result = satisfy(|ch| ch.is_uppercase()).parse(input);
 
         assert!(result.is_err_and(|err| err == ParseError::PredicateFailed))
@@ -153,14 +243,13 @@ mod parser_tests {
 
     #[test]
     fn test_chain() {
-        let input = define_state("Hello", None, None);
+        let input = ParseStateBuilder::default().source("Hello").build();
         let result = chain(next(), satisfy(|ch| ch.is_lowercase())).parse(input);
         let expected_parsed = ('H', 'e');
-        let expected_state = define_state(
-            "llo",
-            Some(expected_parsed.0.len_utf8() + expected_parsed.1.len_utf8()),
-            None,
-        );
+        let expected_state = ParseStateBuilder::default()
+            .source("llo")
+            .position(expected_parsed.0.len_utf8() + expected_parsed.1.len_utf8())
+            .build();
 
         assert!(result.is_ok_and(|((parsed1, parsed2), state)| {
             parsed1 == expected_parsed.0
@@ -171,7 +260,7 @@ mod parser_tests {
 
     #[test]
     fn test_chain_fails_by_first_parser() {
-        let input = define_state("", None, None);
+        let input = ParseStateBuilder::default().build();
         let result = chain(next(), satisfy(|ch| ch.is_lowercase())).parse(input);
 
         assert!(
@@ -183,7 +272,7 @@ mod parser_tests {
 
     #[test]
     fn test_chain_fails_by_second_parser() {
-        let input = define_state("HE", None, None);
+        let input = ParseStateBuilder::default().source("HE").build();
         let result = chain(next(), satisfy(|ch| ch.is_lowercase())).parse(input);
 
         assert!(
