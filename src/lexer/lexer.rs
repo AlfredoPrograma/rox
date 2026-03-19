@@ -38,6 +38,17 @@ pub fn scan_tokens<'a>() -> Box<dyn Parser<'a, Vec<Token>> + 'a> {
     many1(or(vec![paired_chars(), single_char()]))
 }
 
+fn linebreaks<'a>() -> Box<dyn Parser<'a, ()> + 'a> {
+    map(
+        many1(map_with_rest(satisfy(|ch| ch == '\n'), |(_, mut rest)| {
+            rest.line += 1;
+            rest.position = 1;
+            ((), rest)
+        })),
+        |_| (),
+    )
+}
+
 fn whitespaces<'a>() -> Box<dyn Parser<'a, ()> + 'a> {
     map(
         many1(satisfy(|ch| ch == '\t' || ch == '\r' || ch == ' ')),
@@ -139,6 +150,8 @@ fn lexeme_to_token_kind(lexeme: &str) -> TokenKind {
 
 #[cfg(test)]
 mod lexer_tests {
+    use std::result;
+
     use crate::combinators::combinators::{ParseState, ParseStateBuilder};
 
     use super::*;
@@ -248,6 +261,23 @@ mod lexer_tests {
         let expected_state = ParseStateBuilder::default()
             .source("")
             .position(source.len())
+            .build();
+
+        assert!(result.is_ok_and(|(parsed, state)| {
+            parsed == expected_parsed && compare_states(state, expected_state)
+        }))
+    }
+
+    #[test]
+    fn test_linebreaks() {
+        let source = "\n\n\n";
+        let input = ParseStateBuilder::default().source(source).build();
+        let result = linebreaks().parse(input);
+        let expected_parsed = ();
+        let expected_state = ParseStateBuilder::default()
+            .source("")
+            .position(1)
+            .line(4)
             .build();
 
         dbg!(&result);
