@@ -1,4 +1,4 @@
-use crate::combinators::combinators::{Parser, char, many1, or};
+use crate::combinators::combinators::{Parser, chain, char, many1, map, map_with_rest, or};
 
 #[derive(Debug, PartialEq)]
 enum TokenKind {
@@ -13,6 +13,15 @@ enum TokenKind {
     Semicolon,
     Slash,
     Star,
+
+    Bang,
+    BangEqual,
+    Equal,
+    DoubleEqual,
+    Greater,
+    GreaterEqual,
+    Less,
+    LessEqual,
 }
 
 #[derive(Debug, PartialEq)]
@@ -23,11 +32,49 @@ pub struct Token {
     position: usize,
 }
 
-pub fn scan_tokens<'a>() -> impl Parser<'a, Vec<Token>> {
-    many1(or(vec![single_char()]))
+pub fn scan_tokens<'a>() -> Box<dyn Parser<'a, Vec<Token>> + 'a> {
+    many1(or(vec![paired_chars(), single_char()]))
 }
 
-fn single_char<'a>() -> impl Parser<'a, Token> {
+fn paired_chars<'a>() -> Box<dyn Parser<'a, Token> + 'a> {
+    let concat_chars = |(x, y)| format!("{x}{y}");
+    let char_as_str = |ch| format!("{ch}");
+
+    let two_or_singles = or(vec![
+        or(vec![
+            map(chain(char('!'), char('=')), concat_chars),
+            map(char('!'), char_as_str),
+        ]),
+        or(vec![
+            map(chain(char('='), char('=')), concat_chars),
+            map(char('='), char_as_str),
+        ]),
+        or(vec![
+            map(chain(char('>'), char('=')), concat_chars),
+            map(char('>'), char_as_str),
+        ]),
+        or(vec![
+            map(chain(char('<'), char('=')), concat_chars),
+            map(char('<'), char_as_str),
+        ]),
+    ]);
+
+    map_with_rest(two_or_singles, |(parsed, rest)| {
+        let lexeme = parsed;
+
+        (
+            Token {
+                kind: lexeme_to_token_kind(lexeme.as_str()),
+                lexeme: lexeme,
+                position: rest.position,
+                line: rest.line,
+            },
+            rest,
+        )
+    })
+}
+
+fn single_char<'a>() -> Box<dyn Parser<'a, Token> + 'a> {
     let allowed_chars = or(vec![
         char('('),
         char(')'),
@@ -42,7 +89,7 @@ fn single_char<'a>() -> impl Parser<'a, Token> {
         char('*'),
     ]);
 
-    allowed_chars.map_with_rest(|(ch, rest)| {
+    map_with_rest(allowed_chars, |(ch, rest)| {
         let lexeme = ch.to_string();
         (
             Token {
@@ -58,6 +105,14 @@ fn single_char<'a>() -> impl Parser<'a, Token> {
 
 fn lexeme_to_token_kind(lexeme: &str) -> TokenKind {
     match lexeme {
+        "!=" => TokenKind::BangEqual,
+        "==" => TokenKind::DoubleEqual,
+        ">=" => TokenKind::GreaterEqual,
+        "<=" => TokenKind::LessEqual,
+        "!" => TokenKind::Bang,
+        "=" => TokenKind::Equal,
+        ">" => TokenKind::Greater,
+        "<" => TokenKind::Less,
         "(" => TokenKind::LeftParen,
         ")" => TokenKind::RightParen,
         "{" => TokenKind::LeftBrace,
@@ -86,7 +141,7 @@ mod lexer_tests {
     }
 
     #[test]
-    fn test_single_char_token() {
+    fn test_single_char() {
         let source = "(){},.-+;/*.";
         let input = ParseStateBuilder::default().source(source).build();
         let result = many1(single_char()).parse(input);
@@ -108,5 +163,70 @@ mod lexer_tests {
             result.is_ok_and(|(parsed, state)| parsed == expected_parsed
                 && compare_states(state, expected_state))
         )
+    }
+
+    #[test]
+    fn test_two_or_single_char() {
+        let source = "!><!===>=<==";
+        let input = ParseStateBuilder::default().source(source).build();
+        let result = many1(paired_chars()).parse(input);
+        let expected_parsed = vec![
+            Token {
+                kind: TokenKind::Bang,
+                lexeme: "!".to_string(),
+                position: 1,
+                line: 1,
+            },
+            Token {
+                kind: TokenKind::Greater,
+                lexeme: ">".to_string(),
+                position: 2,
+                line: 1,
+            },
+            Token {
+                kind: TokenKind::Less,
+                lexeme: "<".to_string(),
+                position: 3,
+                line: 1,
+            },
+            Token {
+                kind: TokenKind::BangEqual,
+                lexeme: "!=".to_string(),
+                position: 5,
+                line: 1,
+            },
+            Token {
+                kind: TokenKind::DoubleEqual,
+                lexeme: "==".to_string(),
+                position: 7,
+                line: 1,
+            },
+            Token {
+                kind: TokenKind::GreaterEqual,
+                lexeme: ">=".to_string(),
+                position: 9,
+                line: 1,
+            },
+            Token {
+                kind: TokenKind::LessEqual,
+                lexeme: "<=".to_string(),
+                position: 11,
+                line: 1,
+            },
+            Token {
+                kind: TokenKind::Equal,
+                lexeme: "=".to_string(),
+                position: 12,
+                line: 1,
+            },
+        ];
+        let expected_state = ParseStateBuilder::default()
+            .source("")
+            .position(source.len())
+            .build();
+
+        assert!(result.is_ok_and(|(parsed, state)| {
+            parsed == expected_parsed && compare_states(state, expected_state)
+        }))
     }
 }

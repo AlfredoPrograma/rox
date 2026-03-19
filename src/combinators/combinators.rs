@@ -1,3 +1,4 @@
+#![allow(unused, dead_code)]
 use std::{iter::Peekable, str::Chars};
 
 pub struct ParseStateBuilder<'a> {
@@ -72,50 +73,52 @@ type ParseResult<'a, Output> = Result<(Output, ParseState<'a>), ParseError>;
 
 pub trait Parser<'a, Output> {
     fn parse(&self, input: ParseState<'a>) -> ParseResult<'a, Output>;
-    fn map_with_rest<MapFn, MapInto>(self, transform: MapFn) -> impl Parser<'a, MapInto>
-    where
-        MapFn: Fn((Output, ParseState<'a>)) -> (MapInto, ParseState<'a>);
-    fn map<MapFn, MapInto>(self, transform: MapFn) -> impl Parser<'a, MapInto>
-    where
-        MapFn: Fn(Output) -> MapInto;
+}
+
+pub fn map<'a, Output, MapFn, MapInto>(
+    parser: Box<dyn Parser<'a, Output> + 'a>,
+    transform: MapFn,
+) -> Box<dyn Parser<'a, MapInto> + 'a>
+where
+    Output: 'a,
+    MapFn: Fn(Output) -> MapInto + 'a,
+{
+    Box::new(move |state| parser.parse(state).map(|(x, rest)| (transform(x), rest)))
+}
+
+pub fn map_with_rest<'a, Output, MapFn, MapInto>(
+    parser: Box<dyn Parser<'a, Output> + 'a>,
+    transform: MapFn,
+) -> Box<dyn Parser<'a, MapInto> + 'a>
+where
+    Output: 'a,
+    MapFn: Fn((Output, ParseState<'a>)) -> (MapInto, ParseState<'a>) + 'a,
+{
+    Box::new(move |state: ParseState<'a>| parser.parse(state).map(|(x, rest)| transform((x, rest))))
 }
 
 impl<'a, F, Output> Parser<'a, Output> for F
 where
-    F: Fn(ParseState<'a>) -> ParseResult<'a, Output>,
+    F: Fn(ParseState<'a>) -> ParseResult<'a, Output> + 'a,
 {
     fn parse(&self, input: ParseState<'a>) -> ParseResult<'a, Output> {
         self(input)
     }
-
-    fn map<MapFn, MapInto>(self, transform: MapFn) -> impl Parser<'a, MapInto>
-    where
-        MapFn: Fn(Output) -> MapInto,
-    {
-        move |state| self(state).map(|(x, rest)| (transform(x), rest))
-    }
-
-    fn map_with_rest<MapFn, MapInto>(self, transform: MapFn) -> impl Parser<'a, MapInto>
-    where
-        MapFn: Fn((Output, ParseState<'a>)) -> (MapInto, ParseState<'a>),
-    {
-        move |state: ParseState<'a>| self(state).map(|(x, rest)| transform((x, rest)))
-    }
 }
 
-pub fn next<'a>() -> impl Parser<'a, char> {
-    move |mut state: ParseState<'a>| {
+pub fn next<'a>() -> Box<dyn Parser<'a, char> + 'a> {
+    Box::new(move |mut state: ParseState<'a>| {
         let ch = state.source.next().ok_or(ParseError::CannotGetNext)?;
         state.position += ch.len_utf8();
         Ok((ch, state))
-    }
+    })
 }
 
-pub fn satisfy<'a, F>(predicate: F) -> impl Parser<'a, char>
+pub fn satisfy<'a, F>(predicate: F) -> Box<dyn Parser<'a, char> + 'a>
 where
-    F: Fn(char) -> bool,
+    F: Fn(char) -> bool + 'a,
 {
-    move |mut state: ParseState<'a>| {
+    Box::new(move |mut state: ParseState<'a>| {
         let ch = state
             .source
             .peek()
@@ -129,15 +132,22 @@ where
         state.source.next();
         state.position += ch.len_utf8();
         return Ok((ch, state));
-    }
+    })
 }
 
-pub fn char<'a>(target: char) -> impl Parser<'a, char> {
+pub fn char<'a>(target: char) -> Box<dyn Parser<'a, char> + 'a> {
     satisfy(move |ch| ch == target)
 }
 
-pub fn chain<'a, T, K>(p1: impl Parser<'a, T>, p2: impl Parser<'a, K>) -> impl Parser<'a, (T, K)> {
-    move |state: ParseState<'a>| {
+pub fn chain<'a, T, K>(
+    p1: Box<dyn Parser<'a, T> + 'a>,
+    p2: Box<dyn Parser<'a, K> + 'a>,
+) -> Box<dyn Parser<'a, (T, K)> + 'a>
+where
+    T: 'a,
+    K: 'a,
+{
+    Box::new(move |state: ParseState<'a>| {
         let (x1, rest) = p1
             .parse(state)
             .map_err(|err| ParseError::ChainFailed(Box::new(err)))?;
@@ -145,11 +155,14 @@ pub fn chain<'a, T, K>(p1: impl Parser<'a, T>, p2: impl Parser<'a, K>) -> impl P
             .parse(rest)
             .map_err(|err| ParseError::ChainFailed(Box::new(err)))?;
         Ok(((x1, x2), rest))
-    }
+    })
 }
 
-pub fn or<'a, T>(ps: Vec<impl Parser<'a, T>>) -> impl Parser<'a, T> {
-    move |state: ParseState<'a>| {
+pub fn or<'a, T>(ps: Vec<Box<dyn Parser<'a, T> + 'a>>) -> Box<dyn Parser<'a, T> + 'a>
+where
+    T: 'a,
+{
+    Box::new(move |state: ParseState<'a>| {
         for p in &ps {
             let result = p.parse(state.clone());
 
@@ -159,11 +172,14 @@ pub fn or<'a, T>(ps: Vec<impl Parser<'a, T>>) -> impl Parser<'a, T> {
         }
 
         Err(ParseError::NoneParserMatched)
-    }
+    })
 }
 
-pub fn many1<'a, T>(p: impl Parser<'a, T>) -> impl Parser<'a, Vec<T>> {
-    move |state: ParseState<'a>| {
+pub fn many1<'a, T>(p: Box<dyn Parser<'a, T> + 'a>) -> Box<dyn Parser<'a, Vec<T>> + 'a>
+where
+    T: 'a,
+{
+    Box::new(move |state: ParseState<'a>| {
         let mut results = vec![];
         let mut input = state;
 
@@ -174,7 +190,7 @@ pub fn many1<'a, T>(p: impl Parser<'a, T>) -> impl Parser<'a, Vec<T>> {
 
         if results.is_empty() {}
         Ok((results, input))
-    }
+    })
 }
 
 #[cfg(test)]
