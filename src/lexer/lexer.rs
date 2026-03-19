@@ -1,4 +1,6 @@
-use crate::combinators::combinators::{Parser, chain, char, many1, map, map_with_rest, or};
+use crate::combinators::combinators::{
+    Parser, chain, char, many1, map, map_with_rest, or, satisfy,
+};
 
 #[derive(Debug, PartialEq)]
 enum TokenKind {
@@ -34,6 +36,13 @@ pub struct Token {
 
 pub fn scan_tokens<'a>() -> Box<dyn Parser<'a, Vec<Token>> + 'a> {
     many1(or(vec![paired_chars(), single_char()]))
+}
+
+fn whitespaces<'a>() -> Box<dyn Parser<'a, ()> + 'a> {
+    map(
+        many1(satisfy(|ch| ch == '\t' || ch == '\r' || ch == ' ')),
+        |_| (),
+    )
 }
 
 fn paired_chars<'a>() -> Box<dyn Parser<'a, Token> + 'a> {
@@ -224,6 +233,24 @@ mod lexer_tests {
             .source("")
             .position(source.len())
             .build();
+
+        assert!(result.is_ok_and(|(parsed, state)| {
+            parsed == expected_parsed && compare_states(state, expected_state)
+        }))
+    }
+
+    #[test]
+    fn test_whitespaces() {
+        let source = " \r\t ";
+        let input = ParseStateBuilder::default().source(source).build();
+        let result = whitespaces().parse(input);
+        let expected_parsed = ();
+        let expected_state = ParseStateBuilder::default()
+            .source("")
+            .position(source.len())
+            .build();
+
+        dbg!(&result);
 
         assert!(result.is_ok_and(|(parsed, state)| {
             parsed == expected_parsed && compare_states(state, expected_state)
