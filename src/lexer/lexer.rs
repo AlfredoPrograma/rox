@@ -1,5 +1,5 @@
 use crate::combinators::combinators::{
-    Parser, bracket, chain, char, many1, map, map_with_rest, or, satisfy,
+    ParseState, Parser, bracket, chain, char, many1, map, map_with_rest, or, satisfy,
 };
 
 #[derive(Debug, PartialEq)]
@@ -38,7 +38,61 @@ pub struct Token {
 }
 
 pub fn scan_tokens<'a>() -> Box<dyn Parser<'a, Vec<Token>> + 'a> {
-    many1(or(vec![paired_chars(), single_char()]))
+    many1(or(vec![number(), string(), paired_chars(), single_char()]))
+}
+
+fn number<'a>() -> Box<dyn Parser<'a, Token> + 'a> {
+    map_with_rest(
+        or(vec![float(), integer(), zero_or_digit()]),
+        |(lexeme, rest)| {
+            (
+                Token {
+                    kind: TokenKind::Number,
+                    lexeme: lexeme,
+                    line: rest.line,
+                    position: rest.position,
+                },
+                rest,
+            )
+        },
+    )
+}
+
+fn float<'a>() -> Box<dyn Parser<'a, String> + 'a> {
+    Box::new(move |state: ParseState<'a>| {
+        let (int_part, rest) = integer().parse(state)?;
+        let (_, rest) = char('.').parse(rest)?;
+        let (float_part, rest) = map(many1(zero_or_digit()), |digits| {
+            digits.into_iter().collect::<String>()
+        })
+        .parse(rest)?;
+
+        Ok((format!("{int_part}.{float_part}"), rest))
+    })
+}
+
+fn integer<'a>() -> Box<dyn Parser<'a, String> + 'a> {
+    Box::new(move |state: ParseState<'a>| {
+        let (start, rest) = map(digit(), |ch| ch.to_string()).parse(state)?;
+        let (following, rest) = map(many1(zero_or_digit()), |digits| {
+            digits.into_iter().collect::<String>()
+        })
+        .parse(rest)?;
+
+        Ok((format!("{start}{following}"), rest))
+    })
+}
+
+fn zero_or_digit<'a>() -> Box<dyn Parser<'a, String> + 'a> {
+    map(or(vec![zero(), digit()]), |ch| ch.to_string())
+}
+
+fn digit<'a>() -> Box<dyn Parser<'a, char> + 'a> {
+    satisfy(|ch| ch >= '1' && ch <= '9')
+}
+
+fn zero<'a>() -> Box<dyn Parser<'a, char> + 'a> {
+    char('0')
 }
 
 fn string<'a>() -> Box<dyn Parser<'a, Token> + 'a> {
@@ -176,8 +230,6 @@ fn lexeme_to_token_kind(lexeme: &str) -> TokenKind {
 
 #[cfg(test)]
 mod lexer_tests {
-    use std::result;
-
     use crate::combinators::combinators::{ParseState, ParseStateBuilder};
 
     use super::*;
@@ -325,6 +377,107 @@ mod lexer_tests {
         let expected_state = ParseStateBuilder::default()
             .source("")
             .position(source.len())
+            .build();
+
+        assert_eq!(parsed, expected_parsed);
+        assert!(compare_states(state, expected_state))
+    }
+
+    #[test]
+    fn test_number_zero() {
+        let source = "0";
+        let input = ParseStateBuilder::default().source(source).build();
+        let (parsed, state) = number().parse(input).unwrap();
+        let expected_parsed = Token {
+            kind: TokenKind::Number,
+            lexeme: "0".to_string(),
+            position: source.len(),
+            line: 1,
+        };
+        let expected_state = ParseStateBuilder::default()
+            .source("")
+            .position(source.len())
+            .build();
+
+        assert_eq!(parsed, expected_parsed);
+        assert!(compare_states(state, expected_state))
+    }
+
+    #[test]
+    fn test_number_digit() {
+        let source = "5";
+        let input = ParseStateBuilder::default().source(source).build();
+        let (parsed, state) = number().parse(input).unwrap();
+        let expected_parsed = Token {
+            kind: TokenKind::Number,
+            lexeme: "5".to_string(),
+            position: source.len(),
+            line: 1,
+        };
+        let expected_state = ParseStateBuilder::default()
+            .source("")
+            .position(source.len())
+            .build();
+
+        assert_eq!(parsed, expected_parsed);
+        assert!(compare_states(state, expected_state))
+    }
+
+    #[test]
+    fn test_number_integer() {
+        let source = "5259";
+        let input = ParseStateBuilder::default().source(source).build();
+        let (parsed, state) = number().parse(input).unwrap();
+        let expected_parsed = Token {
+            kind: TokenKind::Number,
+            lexeme: "5259".to_string(),
+            position: source.len(),
+            line: 1,
+        };
+        let expected_state = ParseStateBuilder::default()
+            .source("")
+            .position(source.len())
+            .build();
+
+        assert_eq!(parsed, expected_parsed);
+        assert!(compare_states(state, expected_state))
+    }
+
+    #[test]
+    fn test_number_float() {
+        let source = "5259.07";
+        let input = ParseStateBuilder::default().source(source).build();
+        let (parsed, state) = number().parse(input).unwrap();
+        let expected_parsed = Token {
+            kind: TokenKind::Number,
+            lexeme: "5259.07".to_string(),
+            position: source.len(),
+            line: 1,
+        };
+        let expected_state = ParseStateBuilder::default()
+            .source("")
+            .position(source.len())
+            .build();
+
+        assert_eq!(parsed, expected_parsed);
+        assert!(compare_states(state, expected_state))
+    }
+
+    #[test]
+    fn test_number_integer_with_incomplete_float() {
+        let source = "5259.";
+        let input = ParseStateBuilder::default().source(source).build();
+        let (parsed, state) = number().parse(input).unwrap();
+        let expected_number = "5259".to_string();
+        let expected_parsed = Token {
+            kind: TokenKind::Number,
+            position: expected_number.len(),
+            lexeme: expected_number,
+            line: 1,
+        };
+        let expected_state = ParseStateBuilder::default()
+            .source(".")
+            .position(expected_parsed.lexeme.len())
             .build();
 
         assert_eq!(parsed, expected_parsed);

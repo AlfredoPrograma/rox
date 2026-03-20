@@ -188,7 +188,10 @@ where
             input = rest
         }
 
-        if results.is_empty() {}
+        if results.is_empty() {
+            return Err(ParseError::NoneParserMatched);
+        }
+
         Ok((results, input))
     })
 }
