@@ -1,9 +1,9 @@
-#![allow(unused, dead_code)]
-use std::{fs::OpenOptions, iter::Peekable, process::Output, str::Chars};
+use std::{iter::Peekable, str::Chars};
 
+#[allow(dead_code)]
 pub struct ParseStateBuilder<'a> {
     source: Option<Peekable<Chars<'a>>>,
-    line: Option<i32>,
+    line: Option<usize>,
     position: Option<usize>,
 }
 
@@ -17,13 +17,14 @@ impl<'a> std::default::Default for ParseStateBuilder<'a> {
     }
 }
 
+#[allow(dead_code)]
 impl<'a> ParseStateBuilder<'a> {
     pub fn source(mut self, source: &'a str) -> Self {
         self.source = Some(source.chars().peekable());
         self
     }
 
-    pub fn line(mut self, line: i32) -> Self {
+    pub fn line(mut self, line: usize) -> Self {
         self.line = Some(line);
         self
     }
@@ -45,7 +46,7 @@ impl<'a> ParseStateBuilder<'a> {
 #[derive(Debug, Clone)]
 pub struct ParseState<'a> {
     pub source: Peekable<Chars<'a>>,
-    pub line: i32,
+    pub line: usize,
     pub position: usize,
 }
 
@@ -106,12 +107,11 @@ where
     }
 }
 
-pub fn next<'a>() -> Box<dyn Parser<'a, char> + 'a> {
-    Box::new(move |mut state: ParseState<'a>| {
-        let ch = state.source.next().ok_or(ParseError::CannotGetNext)?;
-        state.position += ch.len_utf8();
-        Ok((ch, state))
-    })
+pub fn id<'a, T>(value: T) -> Box<dyn Parser<'a, T> + 'a>
+where
+    T: Clone + 'a,
+{
+    Box::new(move |state: ParseState<'a>| Ok((value.clone(), state)))
 }
 
 pub fn satisfy<'a, F>(predicate: F) -> Box<dyn Parser<'a, char> + 'a>
@@ -196,6 +196,13 @@ where
     })
 }
 
+pub fn many0<'a, T>(p: Box<dyn Parser<'a, T> + 'a>) -> Box<dyn Parser<'a, Vec<T>> + 'a>
+where
+    T: Clone + 'a,
+{
+    or(vec![many1(p), id(vec![])])
+}
+
 pub fn bracket<'a, Open, Output, Close>(
     open: Box<dyn Parser<'a, Open> + 'a>,
     parser: Box<dyn Parser<'a, Output> + 'a>,
@@ -223,29 +230,6 @@ mod combinators_tests {
         s1.source.collect::<String>() == s2.source.collect::<String>()
             && s1.line == s2.line
             && s1.position == s2.position
-    }
-
-    #[test]
-    fn test_next() {
-        let input = ParseStateBuilder::default().source("Hello").build();
-        let result = next().parse(input);
-        let expected_ch = 'H';
-        let expected_state = ParseStateBuilder::default()
-            .source("ello")
-            .position(expected_ch.len_utf8())
-            .build();
-
-        assert!(result.is_ok_and(|(ch, state)| {
-            ch == expected_ch && compare_states(state, expected_state)
-        }))
-    }
-
-    #[test]
-    fn test_next_fails_by_cannot_get_next() {
-        let input = ParseStateBuilder::default().build();
-        let result = next().parse(input);
-
-        assert!(result.is_err_and(|err| err == ParseError::CannotGetNext))
     }
 
     #[test]
@@ -282,7 +266,7 @@ mod combinators_tests {
     #[test]
     fn test_chain() {
         let input = ParseStateBuilder::default().source("Hello").build();
-        let result = chain(next(), satisfy(|ch| ch.is_lowercase())).parse(input);
+        let result = chain(char('H'), satisfy(|ch| ch.is_lowercase())).parse(input);
         let expected_parsed = ('H', 'e');
         let expected_state = ParseStateBuilder::default()
             .source("llo")
@@ -299,7 +283,7 @@ mod combinators_tests {
     #[test]
     fn test_chain_fails_by_first_parser() {
         let input = ParseStateBuilder::default().build();
-        let result = chain(next(), satisfy(|ch| ch.is_lowercase())).parse(input);
+        let result = chain(char('H'), satisfy(|ch| ch.is_lowercase())).parse(input);
 
         assert!(
             result.is_err_and(
@@ -311,7 +295,7 @@ mod combinators_tests {
     #[test]
     fn test_chain_fails_by_second_parser() {
         let input = ParseStateBuilder::default().source("HE").build();
-        let result = chain(next(), satisfy(|ch| ch.is_lowercase())).parse(input);
+        let result = chain(char('a'), satisfy(|ch| ch.is_lowercase())).parse(input);
 
         assert!(
             result.is_err_and(

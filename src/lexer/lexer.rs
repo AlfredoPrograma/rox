@@ -1,5 +1,5 @@
 use crate::combinators::combinators::{
-    ParseState, Parser, bracket, chain, char, many1, map, map_with_rest, or, satisfy,
+    ParseState, Parser, bracket, chain, char, many0, many1, map, map_with_rest, or, satisfy,
 };
 
 #[derive(Debug, PartialEq)]
@@ -27,18 +27,84 @@ enum TokenKind {
 
     Str,
     Number,
+    Identifier,
+
+    And,
+    Class,
+    Else,
+    False,
+    For,
+    Fun,
+    If,
+    Nil,
+    Or,
+    Print,
+    Return,
+    Super,
+    This,
+    True,
+    Var,
+    While,
 }
 
 #[derive(Debug, PartialEq)]
 pub struct Token {
     kind: TokenKind,
     lexeme: String,
-    line: i32,
+    line: usize,
     position: usize,
 }
 
 pub fn scan_tokens<'a>() -> Box<dyn Parser<'a, Vec<Token>> + 'a> {
-    many1(or(vec![number(), string(), paired_chars(), single_char()]))
+    many1(scan_token())
+}
+
+fn scan_token<'a>() -> Box<dyn Parser<'a, Token> + 'a> {
+    Box::new(move |state: ParseState<'a>| {
+        let (_, rest) = linebreaks().parse(state)?;
+        let (_, rest) = whitespaces().parse(rest)?;
+
+        or(vec![
+            identifier_or_keyword(),
+            number(),
+            string(),
+            paired_chars(),
+            single_char(),
+        ])
+        .parse(rest)
+    })
+}
+
+fn identifier_or_keyword<'a>() -> Box<dyn Parser<'a, Token> + 'a> {
+    Box::new(move |state: ParseState<'a>| {
+        let (lexeme, rest) = map(
+            many1(satisfy(|ch| ch.is_ascii_alphanumeric() || ch == '_')),
+            |chs| chs.into_iter().collect::<String>(),
+        )
+        .parse(state)?;
+
+        if let Some(keyword) = lexeme_to_token_kind(lexeme.as_str()) {
+            return Ok((
+                Token {
+                    kind: keyword,
+                    lexeme: lexeme,
+                    line: rest.line,
+                    position: rest.position,
+                },
+                rest,
+            ));
+        }
+
+        Ok((
+            Token {
+                kind: TokenKind::Identifier,
+                lexeme: lexeme,
+                line: rest.line,
+                position: rest.position,
+            },
+            rest,
+        ))
+    })
 }
 
 fn number<'a>() -> Box<dyn Parser<'a, Token> + 'a> {
@@ -99,7 +165,7 @@ fn string<'a>() -> Box<dyn Parser<'a, Token> + 'a> {
     map_with_rest(
         bracket(
             char('"'),
-            map(many1(satisfy(|ch| ch != '"')), |chs| {
+            map(many0(satisfy(|ch| ch != '"')), |chs| {
                 chs.into_iter().collect::<String>()
             }),
             char('"'),
@@ -119,19 +185,16 @@ fn string<'a>() -> Box<dyn Parser<'a, Token> + 'a> {
 }
 
 fn linebreaks<'a>() -> Box<dyn Parser<'a, ()> + 'a> {
-    map(
-        many1(map_with_rest(satisfy(|ch| ch == '\n'), |(_, mut rest)| {
-            rest.line += 1;
-            rest.position = 1;
-            ((), rest)
-        })),
-        |_| (),
-    )
+    map_with_rest(many0(satisfy(|ch| ch == '\n')), |(spaces, mut rest)| {
+        rest.line += spaces.len();
+        rest.position = 1;
+        ((), rest)
+    })
 }
 
 fn whitespaces<'a>() -> Box<dyn Parser<'a, ()> + 'a> {
     map(
-        many1(satisfy(|ch| ch == '\t' || ch == '\r' || ch == ' ')),
+        many0(satisfy(|ch| ch == '\t' || ch == '\r' || ch == ' ')),
         |_| (),
     )
 }
@@ -164,7 +227,7 @@ fn paired_chars<'a>() -> Box<dyn Parser<'a, Token> + 'a> {
 
         (
             Token {
-                kind: lexeme_to_token_kind(lexeme.as_str()),
+                kind: lexeme_to_token_kind(lexeme.as_str()).unwrap(),
                 lexeme: lexeme,
                 position: rest.position,
                 line: rest.line,
@@ -193,7 +256,7 @@ fn single_char<'a>() -> Box<dyn Parser<'a, Token> + 'a> {
         let lexeme = ch.to_string();
         (
             Token {
-                kind: lexeme_to_token_kind(lexeme.as_str()),
+                kind: lexeme_to_token_kind(lexeme.as_str()).unwrap(),
                 lexeme: lexeme,
                 position: rest.position,
                 line: rest.line,
@@ -203,28 +266,44 @@ fn single_char<'a>() -> Box<dyn Parser<'a, Token> + 'a> {
     })
 }
 
-fn lexeme_to_token_kind(lexeme: &str) -> TokenKind {
+fn lexeme_to_token_kind(lexeme: &str) -> Option<TokenKind> {
     match lexeme {
-        "!=" => TokenKind::BangEqual,
-        "==" => TokenKind::DoubleEqual,
-        ">=" => TokenKind::GreaterEqual,
-        "<=" => TokenKind::LessEqual,
-        "!" => TokenKind::Bang,
-        "=" => TokenKind::Equal,
-        ">" => TokenKind::Greater,
-        "<" => TokenKind::Less,
-        "(" => TokenKind::LeftParen,
-        ")" => TokenKind::RightParen,
-        "{" => TokenKind::LeftBrace,
-        "}" => TokenKind::RightBrace,
-        "," => TokenKind::Comma,
-        "." => TokenKind::Dot,
-        "-" => TokenKind::Minus,
-        "+" => TokenKind::Plus,
-        ";" => TokenKind::Semicolon,
-        "/" => TokenKind::Slash,
-        "*" => TokenKind::Star,
-        _ => unreachable!(),
+        "and" => Some(TokenKind::And),
+        "class" => Some(TokenKind::Class),
+        "else" => Some(TokenKind::Else),
+        "false" => Some(TokenKind::False),
+        "for" => Some(TokenKind::For),
+        "fun" => Some(TokenKind::Fun),
+        "if" => Some(TokenKind::If),
+        "nil" => Some(TokenKind::Nil),
+        "or" => Some(TokenKind::Or),
+        "print" => Some(TokenKind::Print),
+        "return" => Some(TokenKind::Return),
+        "super" => Some(TokenKind::Super),
+        "this" => Some(TokenKind::This),
+        "true" => Some(TokenKind::True),
+        "var" => Some(TokenKind::Var),
+        "while" => Some(TokenKind::While),
+        "==" => Some(TokenKind::DoubleEqual),
+        "!=" => Some(TokenKind::BangEqual),
+        ">=" => Some(TokenKind::GreaterEqual),
+        "<=" => Some(TokenKind::LessEqual),
+        "!" => Some(TokenKind::Bang),
+        "=" => Some(TokenKind::Equal),
+        ">" => Some(TokenKind::Greater),
+        "<" => Some(TokenKind::Less),
+        "(" => Some(TokenKind::LeftParen),
+        ")" => Some(TokenKind::RightParen),
+        "{" => Some(TokenKind::LeftBrace),
+        "}" => Some(TokenKind::RightBrace),
+        "," => Some(TokenKind::Comma),
+        "." => Some(TokenKind::Dot),
+        "-" => Some(TokenKind::Minus),
+        "+" => Some(TokenKind::Plus),
+        ";" => Some(TokenKind::Semicolon),
+        "/" => Some(TokenKind::Slash),
+        "*" => Some(TokenKind::Star),
+        _ => None,
     }
 }
 
@@ -248,7 +327,7 @@ mod lexer_tests {
         let expected_parsed = source
             .char_indices()
             .map(|(i, ch)| Token {
-                kind: lexeme_to_token_kind(ch.to_string().as_str()),
+                kind: lexeme_to_token_kind(ch.to_string().as_str()).unwrap(),
                 lexeme: ch.to_string(),
                 position: i + 1,
                 line: 1,
@@ -350,7 +429,7 @@ mod lexer_tests {
     fn test_linebreaks() {
         let source = "\n\n\n";
         let input = ParseStateBuilder::default().source(source).build();
-        let result = linebreaks().parse(input);
+        let (parsed, state) = linebreaks().parse(input).unwrap();
         let expected_parsed = ();
         let expected_state = ParseStateBuilder::default()
             .source("")
@@ -358,9 +437,8 @@ mod lexer_tests {
             .line(4)
             .build();
 
-        assert!(result.is_ok_and(|(parsed, state)| {
-            parsed == expected_parsed && compare_states(state, expected_state)
-        }))
+        assert_eq!(parsed, expected_parsed);
+        assert!(compare_states(state, expected_state))
     }
 
     #[test]
@@ -482,5 +560,45 @@ mod lexer_tests {
 
         assert_eq!(parsed, expected_parsed);
         assert!(compare_states(state, expected_state))
+    }
+
+    #[test]
+    fn test_identifier_or_keyword_for_keyword() {
+        let source = "while";
+        let input = ParseStateBuilder::default().source(source).build();
+        let (parsed, state) = identifier_or_keyword().parse(input).unwrap();
+        let expected_keyword = Token {
+            kind: TokenKind::While,
+            lexeme: source.to_string(),
+            position: source.len(),
+            line: 1,
+        };
+        let expected_state = ParseStateBuilder::default()
+            .source("")
+            .position(source.len())
+            .build();
+
+        assert_eq!(parsed, expected_keyword);
+        assert!(compare_states(state, expected_state));
+    }
+
+    #[test]
+    fn test_identifier_or_keyword_for_identifier() {
+        let source = "my_var1";
+        let input = ParseStateBuilder::default().source(source).build();
+        let (parsed, state) = identifier_or_keyword().parse(input).unwrap();
+        let expected_identifier = Token {
+            kind: TokenKind::Identifier,
+            lexeme: source.to_string(),
+            position: source.len(),
+            line: 1,
+        };
+        let expected_state = ParseStateBuilder::default()
+            .source("")
+            .position(source.len())
+            .build();
+
+        assert_eq!(parsed, expected_identifier);
+        assert!(compare_states(state, expected_state));
     }
 }
