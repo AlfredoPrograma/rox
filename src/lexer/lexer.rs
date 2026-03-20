@@ -1,5 +1,5 @@
 use crate::combinators::combinators::{
-    Parser, chain, char, many1, map, map_with_rest, or, satisfy,
+    Parser, bracket, chain, char, many1, map, map_with_rest, or, satisfy,
 };
 
 #[derive(Debug, PartialEq)]
@@ -24,6 +24,9 @@ enum TokenKind {
     GreaterEqual,
     Less,
     LessEqual,
+
+    Str,
+    Number,
 }
 
 #[derive(Debug, PartialEq)]
@@ -36,6 +39,29 @@ pub struct Token {
 
 pub fn scan_tokens<'a>() -> Box<dyn Parser<'a, Vec<Token>> + 'a> {
     many1(or(vec![paired_chars(), single_char()]))
+}
+
+fn string<'a>() -> Box<dyn Parser<'a, Token> + 'a> {
+    map_with_rest(
+        bracket(
+            char('"'),
+            map(many1(satisfy(|ch| ch != '"')), |chs| {
+                chs.into_iter().collect::<String>()
+            }),
+            char('"'),
+        ),
+        |(str, rest)| {
+            (
+                Token {
+                    kind: TokenKind::Str,
+                    lexeme: str,
+                    line: rest.line,
+                    position: rest.position,
+                },
+                rest,
+            )
+        },
+    )
 }
 
 fn linebreaks<'a>() -> Box<dyn Parser<'a, ()> + 'a> {
@@ -280,10 +306,28 @@ mod lexer_tests {
             .line(4)
             .build();
 
-        dbg!(&result);
-
         assert!(result.is_ok_and(|(parsed, state)| {
             parsed == expected_parsed && compare_states(state, expected_state)
         }))
+    }
+
+    #[test]
+    fn test_string() {
+        let source = "\"Hello world\"";
+        let input = ParseStateBuilder::default().source(source).build();
+        let (parsed, state) = string().parse(input).unwrap();
+        let expected_parsed = Token {
+            kind: TokenKind::Str,
+            lexeme: "Hello world".to_string(),
+            position: source.len(),
+            line: 1,
+        };
+        let expected_state = ParseStateBuilder::default()
+            .source("")
+            .position(source.len())
+            .build();
+
+        assert_eq!(parsed, expected_parsed);
+        assert!(compare_states(state, expected_state))
     }
 }

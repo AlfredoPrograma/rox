@@ -1,5 +1,5 @@
 #![allow(unused, dead_code)]
-use std::{iter::Peekable, str::Chars};
+use std::{fs::OpenOptions, iter::Peekable, process::Output, str::Chars};
 
 pub struct ParseStateBuilder<'a> {
     source: Option<Peekable<Chars<'a>>>,
@@ -193,6 +193,25 @@ where
     })
 }
 
+pub fn bracket<'a, Open, Output, Close>(
+    open: Box<dyn Parser<'a, Open> + 'a>,
+    parser: Box<dyn Parser<'a, Output> + 'a>,
+    close: Box<dyn Parser<'a, Close> + 'a>,
+) -> Box<dyn Parser<'a, Output> + 'a>
+where
+    Open: 'a,
+    Output: 'a,
+    Close: 'a,
+{
+    Box::new(move |input: ParseState<'a>| {
+        let (_, rest) = open.parse(input)?;
+        let (parsed, rest) = parser.parse(rest)?;
+        let (_, rest) = close.parse(rest)?;
+
+        Ok((parsed, rest))
+    })
+}
+
 #[cfg(test)]
 mod combinators_tests {
     use super::*;
@@ -296,5 +315,56 @@ mod combinators_tests {
                 |err| err == ParseError::ChainFailed(Box::new(ParseError::PredicateFailed))
             )
         )
+    }
+
+    #[test]
+    fn test_bracket() {
+        let source = "[Hello]";
+        let input = ParseStateBuilder::default().source(source).build();
+        let (parsed, state) = bracket(
+            char('['),
+            many1(satisfy(|ch| ch.is_alphabetic())),
+            char(']'),
+        )
+        .parse(input)
+        .unwrap();
+        let expected_parsed = vec!['H', 'e', 'l', 'l', 'o'];
+        let expected_state = ParseStateBuilder::default()
+            .source("")
+            .position(source.len())
+            .build();
+
+        assert_eq!(parsed, expected_parsed);
+        assert!(compare_states(state, expected_state));
+    }
+
+    #[test]
+    fn test_bracket_fails_by_open() {
+        let source = "Hello]";
+        let input = ParseStateBuilder::default().source(source).build();
+        let error = bracket(
+            char('['),
+            many1(satisfy(|ch| ch.is_alphabetic())),
+            char(']'),
+        )
+        .parse(input)
+        .unwrap_err();
+
+        assert_eq!(error, ParseError::PredicateFailed);
+    }
+
+    #[test]
+    fn test_bracket_fails_by_close() {
+        let source = "[Hello";
+        let input = ParseStateBuilder::default().source(source).build();
+        let error = bracket(
+            char('['),
+            many1(satisfy(|ch| ch.is_alphabetic())),
+            char(']'),
+        )
+        .parse(input)
+        .unwrap_err();
+
+        assert_eq!(error, ParseError::CannotGetNext);
     }
 }
