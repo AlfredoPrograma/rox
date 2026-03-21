@@ -1,10 +1,8 @@
-use std::string;
-
 use crate::combinators::combinators::{
     ParseState, Parser, bracket, chain, char, many0, many1, map, map_with_rest, or, satisfy,
 };
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum TokenKind {
     LeftParen,
     RightParen,
@@ -49,7 +47,7 @@ pub enum TokenKind {
     While,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Token {
     pub kind: TokenKind,
     pub lexeme: String,
