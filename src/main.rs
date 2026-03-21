@@ -2,6 +2,7 @@ use std::fs::read_to_string;
 
 use crate::{combinators::combinators::ParseState, lexer::lexer::scan_tokens};
 
+mod ast;
 mod combinators;
 mod lexer;
 

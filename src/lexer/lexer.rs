@@ -1,9 +1,11 @@
+use std::string;
+
 use crate::combinators::combinators::{
     ParseState, Parser, bracket, chain, char, many0, many1, map, map_with_rest, or, satisfy,
 };
 
 #[derive(Debug, PartialEq)]
-enum TokenKind {
+pub enum TokenKind {
     LeftParen,
     RightParen,
     LeftBrace,
@@ -49,10 +51,21 @@ enum TokenKind {
 
 #[derive(Debug, PartialEq)]
 pub struct Token {
-    kind: TokenKind,
-    lexeme: String,
-    line: usize,
-    position: usize,
+    pub kind: TokenKind,
+    pub lexeme: String,
+    pub line: usize,
+    pub position: usize,
+}
+
+impl Token {
+    pub fn new(kind: TokenKind, lexeme: String) -> Self {
+        Self {
+            kind,
+            lexeme,
+            line: 0,
+            position: 0,
+        }
+    }
 }
 
 pub fn scan_tokens<'a>() -> Box<dyn Parser<'a, Vec<Token>> + 'a> {
