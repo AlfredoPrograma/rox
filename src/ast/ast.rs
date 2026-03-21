@@ -1,5 +1,4 @@
 use core::fmt;
-use std::error::Error;
 
 use crate::lexer::lexer::{Token, TokenKind};
 
@@ -12,16 +11,43 @@ pub enum Value {
     Group(Box<ASTExpression>),
 }
 
+impl fmt::Display for Value {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Value::Nil => write!(f, "null"),
+            Value::Bool(value) => write!(f, "{value}"),
+            Value::Str(value) => write!(f, "{value}"),
+            Value::Number(value) => write!(f, "{value}"),
+            _ => todo!(),
+        }
+    }
+}
+
 #[derive(Debug, PartialEq)]
 enum PrefixOperator {
     BoolNegate,   // "!"
     NumberNegate, // "-"
 }
 
+impl fmt::Display for PrefixOperator {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PrefixOperator::BoolNegate => write!(f, "!"),
+            PrefixOperator::NumberNegate => write!(f, "+"),
+        }
+    }
+}
+
 #[derive(Debug, PartialEq)]
 pub struct PrefixOperation {
     op: PrefixOperator,
     value: Box<ASTExpression>,
+}
+
+impl fmt::Display for PrefixOperation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "({}{})", self.op, self.value)
+    }
 }
 
 #[derive(Debug, PartialEq)]
@@ -38,11 +64,34 @@ enum InfixOperator {
     NEQ,
 }
 
+impl fmt::Display for InfixOperator {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            InfixOperator::Add => write!(f, "+"),
+            InfixOperator::Substract => write!(f, "-"),
+            InfixOperator::Multiply => write!(f, "*"),
+            InfixOperator::Divide => write!(f, "/"),
+            InfixOperator::GT => write!(f, ">"),
+            InfixOperator::GTE => write!(f, ">="),
+            InfixOperator::LT => write!(f, "<"),
+            InfixOperator::LTE => write!(f, "<="),
+            InfixOperator::EQ => write!(f, "=="),
+            InfixOperator::NEQ => write!(f, "!="),
+        }
+    }
+}
+
 #[derive(Debug, PartialEq)]
 pub struct InfixOperation {
     lhs: Box<ASTExpression>,
     op: InfixOperator,
     rhs: Box<ASTExpression>,
+}
+
+impl fmt::Display for InfixOperation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "({}{}{})", self.lhs, self.op, self.rhs)
+    }
 }
 
 #[derive(Debug, PartialEq)]
@@ -53,6 +102,19 @@ pub enum ASTExpression {
     Factor(InfixOperation),
     Unary(PrefixOperation),
     Primary(Value),
+}
+
+impl fmt::Display for ASTExpression {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ASTExpression::Equality(value)
+            | ASTExpression::Comparison(value)
+            | ASTExpression::Term(value)
+            | ASTExpression::Factor(value) => write!(f, "{}", value),
+            ASTExpression::Unary(value) => write!(f, "{}", value),
+            ASTExpression::Primary(value) => write!(f, "{}", value),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -118,6 +180,10 @@ fn or(ps: Vec<Box<dyn ASTParser>>) -> Box<dyn ASTParser> {
 
         Err(ASTParseError::NoneParserMatched)
     })
+}
+
+pub fn expression() -> Box<dyn ASTParser> {
+    equality()
 }
 
 // TODO: discriminate lhs and rhs and avoid operate terms with non number
