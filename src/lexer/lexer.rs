@@ -76,8 +76,8 @@ fn scan_token<'a>() -> Box<dyn Parser<'a, Token> + 'a> {
         let (_, rest) = whitespaces().parse(rest)?;
 
         or(vec![
-            identifier_or_keyword(),
             number(),
+            identifier_or_keyword(),
             string(),
             paired_chars(),
             single_char(),
