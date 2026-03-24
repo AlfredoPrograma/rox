@@ -186,41 +186,45 @@ pub fn expression() -> Box<dyn ASTParser> {
     equality()
 }
 
-// TODO: discriminate lhs and rhs and avoid operate terms with non number
 fn equality() -> Box<dyn ASTParser> {
     Box::new(|state: Vec<Token>| {
         let (lhs, state) =
             or(vec![comparison(), term(), factor(), unary(), primary()]).parse(state)?;
         let mut state = state.into_iter();
-        let next = state.next().ok_or(ASTParseError::NoTokensLeft)?;
-        let operator = match next.kind {
-            TokenKind::DoubleEqual => Ok(InfixOperator::EQ),
-            TokenKind::BangEqual => Ok(InfixOperator::NEQ),
-            _ => Err(ASTParseError::UnrecognizedEqualityInfixOperator),
-        }?;
+        let next = state.next();
 
-        let (rhs, state) = or(vec![
-            equality(),
-            comparison(),
-            term(),
-            factor(),
-            unary(),
-            primary(),
-        ])
-        .parse(state.collect())?;
+        match next {
+            Some(next) => {
+                let operator = match next.kind {
+                    TokenKind::DoubleEqual => Ok(InfixOperator::EQ),
+                    TokenKind::BangEqual => Ok(InfixOperator::NEQ),
+                    _ => Err(ASTParseError::UnrecognizedEqualityInfixOperator),
+                }?;
 
-        Ok((
-            ASTExpression::Equality(InfixOperation {
-                lhs: Box::new(lhs),
-                op: operator,
-                rhs: Box::new(rhs),
-            }),
-            state,
-        ))
+                let (rhs, state) = or(vec![
+                    equality(),
+                    comparison(),
+                    term(),
+                    factor(),
+                    unary(),
+                    primary(),
+                ])
+                .parse(state.collect())?;
+
+                Ok((
+                    ASTExpression::Equality(InfixOperation {
+                        lhs: Box::new(lhs),
+                        op: operator,
+                        rhs: Box::new(rhs),
+                    }),
+                    state,
+                ))
+            }
+            None => Ok((lhs, state.collect())),
+        }
     })
 }
 
-// TODO: discriminate lhs and rhs and avoid operate terms with non number
 fn comparison() -> Box<dyn ASTParser> {
     Box::new(|state: Vec<Token>| {
         let (lhs, state) = or(vec![term(), factor(), unary(), primary()]).parse(state)?;
@@ -248,7 +252,6 @@ fn comparison() -> Box<dyn ASTParser> {
     })
 }
 
-// TODO: discriminate lhs and rhs and avoid operate terms with non number
 fn term() -> Box<dyn ASTParser> {
     Box::new(|state: Vec<Token>| {
         let (lhs, state) = or(vec![factor(), unary(), primary()]).parse(state)?;
@@ -273,7 +276,6 @@ fn term() -> Box<dyn ASTParser> {
     })
 }
 
-// TODO: discriminate lhs and rhs and avoid operate factors with non number
 fn factor() -> Box<dyn ASTParser> {
     Box::new(|state: Vec<Token>| {
         let (lhs, state) = or(vec![unary(), primary()]).parse(state)?;
@@ -306,41 +308,17 @@ fn unary() -> Box<dyn ASTParser> {
             TokenKind::Minus => Ok(PrefixOperator::NumberNegate),
             TokenKind::Bang => Ok(PrefixOperator::BoolNegate),
             _ => Err(ASTParseError::UnrecognizedUnaryOperator),
-        };
+        }?;
 
-        match operator? {
-            PrefixOperator::NumberNegate => {
-                let (value, state) = or(vec![unary(), primary()]).parse(state.collect())?;
-                match value {
-                    ASTExpression::Unary(_) | ASTExpression::Primary(Value::Number(_)) => {
-                        return Ok((
-                            ASTExpression::Unary(PrefixOperation {
-                                op: PrefixOperator::NumberNegate,
-                                value: Box::new(value),
-                            }),
-                            state,
-                        ));
-                    }
-                    _ => panic!("cannot define number negate operation with non numeric argument"),
-                }
-            }
-            PrefixOperator::BoolNegate => {
-                let (value, state) = or(vec![unary(), primary()]).parse(state.collect())?;
-                match value {
-                    ASTExpression::Unary(_) | ASTExpression::Primary(Value::Bool(_)) => {
-                        return Ok((
-                            ASTExpression::Unary(PrefixOperation {
-                                op: PrefixOperator::BoolNegate,
-                                value: Box::new(value),
-                            }),
-                            state,
-                        ));
-                    }
-                    _ => panic!("cannot define bool negate operation with non boolean argument"),
-                }
-            }
-            _ => unreachable!(),
-        }
+        let (value, state) = or(vec![unary(), primary()]).parse(state.collect())?;
+
+        Ok((
+            ASTExpression::Unary(PrefixOperation {
+                op: operator,
+                value: Box::new(value),
+            }),
+            state,
+        ))
     })
 }
 
